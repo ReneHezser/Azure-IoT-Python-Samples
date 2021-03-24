@@ -73,6 +73,11 @@ def device_method_listener(device_client):
             except ValueError:
                 response_status = 400
                 response_payload = {"Response": "Invalid parameter passed as body"}
+        elif method_request.name == "TriggerDeviceToCloudServiceRequest":
+            response_status, response_payload = asyncio.run(trigger_device_cloudservice_request(device_client))
+        elif method_request.name == "TriggerDeviceToCloudServiceResponse":
+            response_status = 200
+            response_payload = method_request.payload
         else:
             response_payload = {
                 "Response": "Direct method {} not defined".format(method_request.name)}
@@ -175,6 +180,14 @@ async def change_parameter(device_client, parameter):
 
     response = {"Response": "OK"}
     return (200, response)
+
+
+async def trigger_device_cloudservice_request(device_client):
+    message = Message("{\"TriggerCloudService\":true}")
+    message.custom_properties["TriggerCloudService"] = "true"
+    device_client.send_message(message)
+
+    return (200, "Cloud service has been triggered")
 
 if __name__ == '__main__':
     print("IoT Hub Quickstart - Simulated device with method listener and file upload")

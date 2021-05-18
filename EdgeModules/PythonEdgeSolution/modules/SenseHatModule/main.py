@@ -8,13 +8,20 @@ import os
 import sys
 import uuid
 import asyncio
-from six.moves import input
 import threading
 from azure.iot.device.aio import IoTHubModuleClient
 from azure.iot.device import Message
 from sense_hat import SenseHat
 import json
 import random
+
+maxAccX=0
+maxAccY=0
+maxAccZ=0
+sumTemp=0
+sumHum=0
+sumPres=0
+measurement_count=0
 
 async def main():
     try:
@@ -61,6 +68,80 @@ async def main():
             except Exception as e:
                 print("Twin patch error %s " % e)
 
+        async def readSensors():
+            global maxAccX
+            global maxAccY
+            global maxAccZ
+            global sumTemp
+            global sumHum
+            global sumPres
+            global measurement_count
+
+            if senseHatAvailable:
+                acceleration = sense.get_accelerometer_raw()
+                x = acceleration['x']
+                y = acceleration['y']
+                z = acceleration['z']
+
+                if maxAccX < abs(x): maxAccX = x
+                if maxAccY < abs(y): maxAccY = y
+                if maxAccZ < abs(z): maxAccZ = z
+
+                # Take readings from all three sensors and round the values to one decimal place
+                t = round(sense.get_temperature(), 1)
+                p = round(sense.get_pressure(), 1)
+                h = round(sense.get_humidity(), 1)
+                sumTemp += t
+                sumPres += p
+                sumHum += h
+            else:
+                x = random.random()
+                y = random.random()
+                z = random.random()
+                sumTemp += random.randint(100, 300)/10.0
+                sumPres += random.randint(9000, 11000)/10.0
+                sumHum += random.randint(100, 800)/10.0
+                time.sleep(0.5)
+
+            measurement_count += 1
+            # print(measurement_count)
+
+        async def sendData():
+            global maxAccX
+            global maxAccY
+            global maxAccZ
+            global sumTemp
+            global sumHum
+            global sumPres
+            global measurement_count
+
+            # get average
+            if measurement_count != 0:
+                t = round(sumTemp/measurement_count, 1)
+                p = round(sumPres/measurement_count, 1)
+                h = round(sumHum/measurement_count, 1)
+                # print("received values from {0} measurements".format(measurement_count))
+                message = '{{"temperature":{0},"pressure":{1},"humidity":{2},"accellerationX":{3},"accellerationY":{4},"accellerationZ":{5}}}'.format(str(t), str(p), str(h), str(maxAccX), str(maxAccY), str(maxAccZ))
+                print(message)
+
+                # msg = Message('{"temperature":' + str(t) +',"pressure":'+str(p)+',"humidity":'+str(h)+'}')
+                msg = Message(message)
+                # print("Sending message: %s" % msg)
+                msg.message_id = uuid.uuid4()
+                msg.correlation_id = "senseHat-"+str(uuid.uuid4())
+                msg.content_encoding = "utf-8"
+                msg.content_type = "application/json"                    
+                await module_client.send_message_to_output(msg, "sensors")
+                print("Message sent")
+                
+                maxAccX=0
+                maxAccY=0
+                maxAccZ=0
+                sumTemp=0
+                sumHum=0
+                sumPres=0
+                measurement_count=0
+
         # define behavior for receiving a twin patch
         async def twin_patch_handler(patch):
             write_on_sensehat(patch)
@@ -84,29 +165,44 @@ async def main():
             readInterval = int(os.environ['ReadInterval'])
         print("Sensor read interval: %s" % str(readInterval))
 
+        counter = readInterval
+        start = time.time()
         while True:
             try:
-                print("[%s] Reading sensors" % datetime.datetime.now())
-                if senseHatAvailable:
-                    # Take readings from all three sensors and round the values to one decimal place
-                    t = round(sense.get_temperature(), 1)
-                    p = round(sense.get_pressure(), 1)
-                    h = round(sense.get_humidity(), 1)
-                else:
-                    t = random.randint(100, 300)/10.0
-                    p = random.randint(9000, 11000)/10.0
-                    h = random.randint(100, 800)/10.0
-                
-                msg = Message('{"temperature":' + str(t) +',"pressure":'+str(p)+',"humidity":'+str(h)+'}')
-                print("Sending message: %s" % msg)
-                msg.message_id = uuid.uuid4()
-                msg.correlation_id = "senseHat-"+str(uuid.uuid4())
-                msg.content_encoding = "utf-8"
-                msg.content_type = "application/json"                    
-                await module_client.send_message_to_output(msg, "sensors")
-                print("Message sent")
+                time.sleep(0.1)
+                # print("[%s] Reading sensors" % datetime.datetime.now())
+                # if senseHatAvailable:
+                #     # Take readings from all three sensors and round the values to one decimal place
+                #     t = round(sense.get_temperature(), 1)
+                #     p = round(sense.get_pressure(), 1)
+                #     h = round(sense.get_humidity(), 1)
+                # else:
+                #     t = random.randint(100, 300)/10.0
+                #     p = random.randint(9000, 11000)/10.0
+                #     h = random.randint(100, 800)/10.0
+                await readSensors()
 
-                time.sleep(readInterval)
+                if time.time() - start > 1:
+                    start = time.time()
+                    counter -= 1
+
+                if counter <= 0:
+                    print("sending...")
+                    await sendData()
+                
+                    # msg = Message('{"temperature":' + str(t) +',"pressure":'+str(p)+',"humidity":'+str(h)+'}')
+                    # print("Sending message: %s" % msg)
+                    # msg.message_id = uuid.uuid4()
+                    # msg.correlation_id = "senseHat-"+str(uuid.uuid4())
+                    # msg.content_encoding = "utf-8"
+                    # msg.content_type = "application/json"                    
+                    # await module_client.send_message_to_output(msg, "sensors")
+                    # print("Message sent")
+
+                    counter = readInterval
+                    start = time.time()
+
+                # time.sleep(readInterval)
             except Exception as e:
                 print("Error reading sensors %s" % e)
 
